@@ -277,12 +277,12 @@ dataset = dataset.filter(lambda x: (x['text'].strip()) != '') # remove empty lin
 
 print(f"Length of training set: {len(dataset['train'])}, Length of validation set: {len(dataset['validation'])}")
 
-tokenized_dataset_boolvariable = False
+tokenized_dataset_boolvariable = True
 if tokenized_dataset_boolvariable:
     tokenized_dataset = dataset.map(
         lambda batch: dict(tokenizer(
             batch['text'],
-            truncation=True,
+            truncation=False,
             padding=False
         )),
         batched=True,
@@ -374,7 +374,6 @@ class A1Trainer:
              model:          The model to train.
              args:           The training parameters stored in a TrainingArguments object.
              train_dataset:  The dataset containing the training documents.
-             eval_dataset:   The dataset containing the validation documents.
              eval_dataset:   The dataset containing the validation documents.
              processing_class:      The tokenizer.
         """

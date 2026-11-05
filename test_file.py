@@ -1,14 +1,16 @@
-#%%
 import torch, pickle
 from torch import nn
 from collections import Counter
 from transformers import BatchEncoding, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import sys, time, os
-#%%
+
+from datasets import load_dataset, load_from_disk, DatasetDict
+
+
 ###
 ### Part 1. Tokenization.
 ###
@@ -114,11 +116,17 @@ def build_tokenizer(train_file, max_voc_size=None, model_max_length=None,
 
     merges = []
 
+    if max_voc_size is not None and max_voc_size < len(vocabulary): # ör detta nödvändigt?
+        raise ValueError("Vocabulary size must be at least 260 (4 special tokens + 256 bytes)")
+
     while max_voc_size is not None and len(vocabulary) < max_voc_size:
+        time_start = time.time()
+
         pair_counts = count_pairs(bytes_sequences)
 
         if not pair_counts:
             break
+
         merge = max(pair_counts, key=pair_counts.get)
         merges.append(merge)
 
@@ -127,23 +135,18 @@ def build_tokenizer(train_file, max_voc_size=None, model_max_length=None,
         new_token = merge[0] + merge[1]
         vocabulary[new_token] = len(vocabulary)
 
-    inverse_vocabulary = {idx: token for token, idx in vocabulary.items()}
+        print(f"Merge {len(merges)}: {merge} (count: {pair_counts[merge]}), Time taken: {time.time() - time_start:.2f} seconds")
 
-    save_file = "vocab-merge.py"
-    with open(save_file, 'wb') as f:
-        pickle.dump((vocabulary, inverse_vocabulary, merges), f)
-
-
-
+    return vocabulary, merges
 
 class A1Tokenizer:
     """A minimal implementation of a tokenizer similar to tokenizers in the HuggingFace library."""
 
-    def __init__(self, vocabulary, inverse_vocabulary, merges, model_max_length, 
-                 pad_token='<PAD>', unk_token='<UNK>', bos_token='<BOS>', eos_token='<EOS>'):
+    def __init__(self, vocabulary, merges, model_max_length, pad_token='<PAD>',
+                 unk_token='<UNK>', bos_token='<BOS>', eos_token='<EOS>'):
         # TODO: store all values you need in order to implement __call__ below.
         self.vocabulary = vocabulary
-        self.inverse_vocabulary = inverse_vocabulary
+        self.inverse_vocabulary = {v: k for k, v in vocabulary.items()}
         self.merges = merges
 
         self.unk_token = unk_token
@@ -155,7 +158,7 @@ class A1Tokenizer:
         self.unk_token_id = vocabulary[unk_token]
         self.bos_token_id = vocabulary[bos_token]
         self.eos_token_id = vocabulary[eos_token]
- 
+
         self.model_max_length = model_max_length  # Needed for truncation.
 
     def __call__(self, texts, truncation=False, padding=False, return_tensors=None):
@@ -200,7 +203,7 @@ class A1Tokenizer:
         if truncation and self.model_max_length > 2:
             encoded_sequences = [seq[:self.model_max_length-2] for seq in encoded_sequences] ### Fråga om BOS EOS ska räknas med i max L, #måste vara större än 2 för att kunna lägga till BOS och EOS
 
-        encoded_sequences = [[self.bos_token_id] + seq + [self.eos_token_id] for seq in encoded_sequences] 
+        encoded_sequences = [[self.vocabulary[self.bos_token]] + seq + [self.vocabulary[self.eos_token]] for seq in encoded_sequences] 
 
         if padding:
             max_length = max(len(seq) for seq in encoded_sequences)
@@ -227,6 +230,8 @@ class A1Tokenizer:
 
     def decode(self, ids):
         """Return a string decoded from given input ids"""
+        if isinstance(ids, torch.Tensor):
+            ids = ids.tolist()
         special_token_ids = {self.pad_token_id, self.bos_token_id, self.eos_token_id}
         tokens = []
         for id in ids:
@@ -239,6 +244,7 @@ class A1Tokenizer:
             tokens.append(token)
         text_bytes = b''.join(tokens)
         decoded_text = text_bytes.decode('utf-8')
+        #kan ett okänt token_id finnas med ids? vad händer då?
         return decoded_text
 
 
@@ -252,33 +258,43 @@ class A1Tokenizer:
         """Load a tokenizer from the given file."""
         with open(filename, 'rb') as f:
             return pickle.load(f)
+# Part 2. Loading the dataset.
+texts = ["hue is good", "test this also"]
 
-model_max_length = 100
+model_max_length = 512
 
+train_filename = r"train.txt"
+run_tokenizer = False
+if run_tokenizer:
+    tokenizer = build_tokenizer(train_filename, max_voc_size=10000, model_max_length=model_max_length)
+    tokenizer.save("tokenizer.pkl")
+else:
+    tokenizer = A1Tokenizer.from_file("tokenizer.pkl")
 
+token_ids = tokenizer(texts, truncation=True, padding=True, return_tensors='pt')
+print(token_ids)
+decoded_texts = [tokenizer.decode(ids) for ids in token_ids['input_ids']]
+print(decoded_texts)
 
-texts = ["Hello, world!", "This is a test.", "Byte-pair encoding is fun!", "b"]
-build_tokenizer("train_texts.txt", max_voc_size=1000, model_max_length=model_max_length)
-#%%
+train_file = r'train.txt'
+val_file = r'val.txt'
+dataset : DatasetDict = load_dataset('text', data_files={'train': train_file, 'validation': val_file})
+dataset = dataset.filter(lambda x: (x['text'].strip()) != '').with_format('torch') # remove empty lines
 
-with open("vocab-merge.py", 'rb') as f:
-    vocabulary, inverse_vocabulary, merges = pickle.load(f)
+print(f"Length of training set: {len(dataset['train'])}, Length of validation set: {len(dataset['validation'])}")
 
-tokenizer = A1Tokenizer(vocabulary, inverse_vocabulary, merges, model_max_length)
-val_filename = "val_texts.txt"
-'''with open(val_filename, 'r', encoding='utf-8') as f:
-    val_texts = f.readlines()'''
-encoded_val_texts = tokenizer(texts, truncation=True, padding=True)
-print("Encoded validation texts:", encoded_val_texts['input_ids'])
-
-for seq in encoded_val_texts['input_ids']:
-    print(len(seq))
-decoded_val_texts = [tokenizer.decode(ids) for ids in encoded_val_texts['input_ids']]
-print("Decoded validation texts:", decoded_val_texts)
-
-print("Vocabulary size:", len(tokenizer))
-
-print("merges:", tokenizer.merges)
-   
-
-# %%
+tokenized_dataset_boolvariable = True
+if tokenized_dataset_boolvariable:
+    tokenized_dataset : DatasetDict = dataset.map(
+        lambda batch: dict(tokenizer(
+            batch['text'],
+            truncation=False,
+            padding=False,
+            
+        )),
+        batched=True,
+        remove_columns=['text']
+    )
+    tokenized_dataset.save_to_disk('tokenized_dataset_padded')
+else:
+    tokenized_dataset = load_from_disk('tokenized_dataset')
