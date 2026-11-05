@@ -2,7 +2,7 @@
 import torch, pickle
 from torch import nn
 from collections import Counter
-from transformers import BatchEncoding, PretrainedConfig, PreTrainedModel
+from transformers import BatchEncoding, PretrainedConfig, PreTrainedModel, TrainingArguments
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from torch.utils.data import DataLoader
@@ -10,7 +10,7 @@ import numpy as np
 import sys, time, os
 
 from datasets import load_dataset, load_from_disk
-from
+
 #%%
 ###
 ### Part 1. Tokenization.
@@ -244,7 +244,6 @@ class A1Tokenizer:
             tokens.append(token)
         text_bytes = b''.join(tokens)
         decoded_text = text_bytes.decode('utf-8')
-        #kan ett okänt token_id finnas med ids? vad händer då?
         return decoded_text
 
 
@@ -259,7 +258,7 @@ class A1Tokenizer:
         with open(filename, 'rb') as f:
             return pickle.load(f)
 #%% Part 2. Loading the dataset.
-texts = ["hue is good", "test this also"]
+model_max_length = 512
 
 train_filename = r"a1/train.txt"
 run_tokenizer = False
@@ -269,11 +268,8 @@ if run_tokenizer:
 else:
     tokenizer = A1Tokenizer.from_file("tokenizer.pkl")
 
-token_ids = tokenizer(texts, truncation=True, padding=True, return_tensors='pt')
-print(token_ids)
-decoded_texts = [tokenizer.decode(ids) for ids in token_ids['input_ids']]
-print(decoded_texts)
-#%%
+
+
 train_file = r'train.txt'
 val_file = r'val.txt'
 dataset = load_dataset('text', data_files={'train': train_file, 'validation': val_file})
@@ -281,7 +277,7 @@ dataset = dataset.filter(lambda x: (x['text'].strip()) != '') # remove empty lin
 
 print(f"Length of training set: {len(dataset['train'])}, Length of validation set: {len(dataset['validation'])}")
 
-tokenized_dataset_boolvariable = True
+tokenized_dataset_boolvariable = False
 if tokenized_dataset_boolvariable:
     tokenized_dataset = dataset.map(
         lambda batch: dict(tokenizer(
@@ -298,10 +294,6 @@ if tokenized_dataset_boolvariable:
 else:
     tokenized_dataset = load_from_disk('tokenized_dataset')
 
-
-
-dl_train = DataLoader(tokenized_dataset['train'], batch_size=32, shuffle=True)
-dl_val = DataLoader(tokenized_dataset['validation'], batch_size=32, shuffle=False)
 
 #%%
 
@@ -323,9 +315,9 @@ class A1RNNModel(PreTrainedModel):
     
     def __init__(self, config):
         super().__init__(config)
-        self.embedding = 
-        self.rnn = 
-        self.unembedding = 
+        self.embedding = torch.nn.Embedding(config.vocab_size, config.embedding_size)
+        self.rnn = torch.nn.LSTM(config.embedding_size, config.hidden_size, batch_first=True)
+        self.unembedding = torch.nn.Linear(config.hidden_size, config.vocab_size)
         self.post_init() # for compatibility 
         
     def forward(self, labels):
@@ -339,17 +331,17 @@ class A1RNNModel(PreTrainedModel):
 
         loss_func = torch.nn.CrossEntropyLoss(ignore_index=-100)
 
-        X = ... # all columns in input_ids except the last one
-        Y = ... # all columns in input_ids except the first one
+        X = labels[:, :-1] # all columns in input_ids except the last one
+        Y = labels[:, 1:] # all columns in input_ids except the first one
 
         assert(X.shape == Y.shape)
 
-        embedded = ...
-        rnn_out, _ = ...
-        out = ...
+        embedded = self.embedding(X)
+        rnn_out, _ = self.rnn(embedded)
+        out = self.unembedding(rnn_out)
 
         #  compute the loss for the model output and Y 
-        return CausalLMOutputWithPast(...)
+        return CausalLMOutputWithPast(loss=loss_func(out.reshape(-1, out.size(-1)), Y.reshape(-1)), logits=out)
 
 
 ###
@@ -416,12 +408,12 @@ class A1Trainer:
         
         # TODO: Relevant arguments: at least args.learning_rate, but you can optionally also consider
         # other Adam-related hyperparameters here.
-        optimizer = torch.optim.AdamW(...)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=args.learning_rate)
 
         # TODO: Relevant arguments: args.per_device_train_batch_size, args.per_device_eval_batch_size
-        train_loader = DataLoader(...)
-        val_loader = DataLoader(...)
-        
+        train_loader = DataLoader(self.train_dataset, batch_size=args.per_device_train_batch_size, shuffle=True)
+        val_loader = DataLoader(self.eval_dataset, batch_size=args.per_device_eval_batch_size, shuffle=False)
+    
         # TODO: Your work here is to implement the training loop.
         #       
         # for each training epoch (use args.num_train_epochs here):
@@ -438,7 +430,85 @@ class A1Trainer:
         #       loss.backward() # loss is stored as an attribute of model's output
         #       optimizer.step()
 
+        for epoch in range(args.num_train_epochs):
+            self.model.train()
+            total_train_loss = 0.0
+            for batch_idx, batch in enumerate(train_loader):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+
+                labels = input_ids.clone()
+                labels[labels == self.processing_class.pad_token_id] = -100
+
+                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+
+                loss = outputs.loss
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                total_train_loss += loss.item()
+
+                if (epoch + 1) % 10 == 0:
+                    print(f'Epoch {epoch + 1}, Batch index {batch_idx}, Loss: {loss.item():.4f}')
+
+
+            avg_train_loss = total_train_loss / len(train_loader) if len(train_loader) > 0 else float('inf')
+
+            print(f'Epoch {epoch + 1}/{args.num_train_epochs}, Average Training Loss: {avg_train_loss:.4f}')
+
+            # Evaluate the model on the validation set after each epoch
+            self.model.eval()
+            total_loss = 0.0
+            num_batches = 0
+            with torch.no_grad():
+                for batch in val_loader:
+                    input_ids = batch['input_ids'].to(device)
+                    attention_mask = batch['attention_mask'].to(device)
+
+                    labels = input_ids.clone()
+                    labels[labels == self.processing_class.pad_token_id] = -100
+
+                    outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    total_loss += outputs.loss.item()
+                    num_batches += 1
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
+            print(f'Epoch {epoch + 1}/{args.num_train_epochs}, Validation Loss: {avg_loss:.4f}')
+
         print(f'Saving to {args.output_dir}.')
         self.model.save_pretrained(args.output_dir)
 
+#%%
     
+### train model
+model = A1RNNModel(A1RNNModelConfig(vocab_size=len(tokenizer), embedding_size=128, hidden_size=256))
+training_dataset = tokenized_dataset['train']
+validation_dataset = tokenized_dataset['validation']
+
+
+
+class TrainingConfig:
+    def __init__(self):
+        self.learning_rate = 0.001
+        self.num_train_epochs = 10
+        self.per_device_train_batch_size = 32
+        self.per_device_eval_batch_size = 32
+        self.output_dir = './trained_model'
+        self.optim = 'adamw_torch'
+        self.eval_strategy = 'epoch'
+        self.use_cpu = False  # Set to True to force CPU usage, otherwise it will use GPU if available.
+        self.model_max_length = 512  # Set the maximum sequence length for the model.
+        
+
+training_args = TrainingConfig()
+
+
+#%%
+trainer = A1Trainer(model, training_args, training_dataset, validation_dataset, tokenizer)
+
+trainer.train()
+# %%
+import sys
+print(sys.executable)
+# %%
