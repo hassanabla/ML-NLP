@@ -507,7 +507,3 @@ training_args = TrainingConfig()
 trainer = A1Trainer(model, training_args, training_dataset, validation_dataset, tokenizer)
 
 trainer.train()
-# %%
-import sys
-print(sys.executable)
-# %%

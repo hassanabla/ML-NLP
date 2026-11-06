@@ -4,11 +4,11 @@ from collections import Counter
 from transformers import BatchEncoding, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import numpy as np
 import sys, time, os
 
-from datasets import load_dataset, load_from_disk, DatasetDict
+from datasets import load_dataset, load_from_disk
 
 
 ###
@@ -278,21 +278,22 @@ print(decoded_texts)
 
 train_file = r'train.txt'
 val_file = r'val.txt'
-dataset : DatasetDict = load_dataset('text', data_files={'train': train_file, 'validation': val_file})
-dataset = dataset.filter(lambda x: (x['text'].strip()) != '').with_format('torch') # remove empty lines
+dataset = load_dataset('text', data_files={'train': train_file, 'validation': val_file})
+dataset = dataset.filter(lambda x: (x['text'].strip()) != '') # remove empty lines
 
 print(f"Length of training set: {len(dataset['train'])}, Length of validation set: {len(dataset['validation'])}")
 
 tokenized_dataset_boolvariable = True
 if tokenized_dataset_boolvariable:
-    tokenized_dataset : DatasetDict = dataset.map(
+    tokenized_dataset = dataset.map(
         lambda batch: dict(tokenizer(
             batch['text'],
-            truncation=False,
-            padding=False,
-            
+            truncation=True,
+            padding=True
         )),
         batched=True,
+        batch_size=1000,
+        num_proc=8,
         remove_columns=['text']
     )
     tokenized_dataset.save_to_disk('tokenized_dataset_padded')

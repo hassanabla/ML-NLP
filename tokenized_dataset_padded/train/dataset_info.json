@@ -1,0 +1,48 @@
+{
+  "builder_name": "text",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "text",
+  "dataset_size": 74194780,
+  "description": "",
+  "download_size": 73205182,
+  "features": {
+    "input_ids": {
+      "feature": {
+        "dtype": "int32",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "attention_mask": {
+      "feature": {
+        "dtype": "int8",
+        "_type": "Value"
+      },
+      "_type": "List"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 147399962,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 65847838,
+      "num_examples": 294118,
+      "dataset_name": "text"
+    },
+    "validation": {
+      "name": "validation",
+      "num_bytes": 8346942,
+      "num_examples": 35748,
+      "dataset_name": "text"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
